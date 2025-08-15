@@ -1,22 +1,28 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import StreamingResponse
-from gtts import gTTS
-from io import BytesIO
+from fastapi import FastAPI, Form, BackgroundTasks
+from kitten_tts import TTS
+from fastapi.responses import FileResponse
+import io
+import tempfile
+import os
 
-app = FastAPI(title="gTTS Text-to-Speech API")
+app = FastAPI()
+tts = TTS()
 
-@app.get("/speak", response_class=StreamingResponse)
-def speak(text: str = Query(..., min_length=1, max_length=500), lang: str = "en"):
-    """
-    Stream TTS audio for the given text and language.
-    Example: /speak?text=Hello+world&lang=en
-    """
-    tts = gTTS(text=text, lang=lang)
-    mp3_fp = BytesIO()
-    tts.write_to_fp(mp3_fp)
-    mp3_fp.seek(0)
-    return StreamingResponse(mp3_fp, media_type="audio/mpeg")
+@app.post("/speak")
+async def speak(text: str = Form(...), background_tasks: BackgroundTasks):
+    from asyncio import to_thread
+    audio_bytes = await to_thread(tts.speak, text)
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    # Schedule file deletion after response
+    background_tasks.add_task(os.remove, tmp_path)
+
+    return FileResponse(
+        path=tmp_path,
+        media_type="audio/mpeg",
+        filename="speech.mp3"
+    )
